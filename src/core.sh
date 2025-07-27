@@ -21,6 +21,7 @@ protocol_list=(
     VLESS-REALITY
     VLESS-HTTP2-REALITY
     # Direct
+    Direct
     Socks
 )
 ss_method_list=(
@@ -1041,7 +1042,7 @@ add() {
         ss)
             is_new_protocol=Shadowsocks
             ;;
-        door | direct)
+        door | direct | forward | port-forward | pf)
             is_new_protocol=Direct
             ;;
         tuic)
@@ -1104,7 +1105,9 @@ add() {
         is_use_port=$2
         is_use_door_addr=$3
         is_use_door_port=$4
-        is_add_opts="[port] [remote_addr] [remote_port]"
+        # 默认远程端口与本地端口一致
+        [[ $is_use_port && ! $is_use_door_port ]] && is_use_door_port=$is_use_port
+        is_add_opts="[local_port] [target_addr] [target_port]"
         ;;
     socks)
         is_socks=1
@@ -1248,12 +1251,19 @@ add() {
         fi
     fi
 
-    # Dokodemo-Door
+    # Direct / Port-Forward
     if [[ $is_new_protocol == 'Direct' ]]; then
-        # set remote addr
-        [[ ! $door_addr ]] && ask string door_addr "请输入目标地址:"
-        # set remote port
-        [[ ! $door_port ]] && ask string door_port "请输入目标端口:"
+        # set target addr
+        [[ ! $door_addr ]] && ask string door_addr "请输入目标服务器地址:"
+        # set target port (default same as local port)
+        if [[ ! $door_port ]]; then
+            if [[ $port ]]; then
+                ask string door_port "请输入目标端口 (默认: $port):"
+                [[ ! $door_port ]] && door_port=$port
+            else
+                ask string door_port "请输入目标端口:"
+            fi
+        fi
     fi
 
     # Shadowsocks 2022
@@ -1404,7 +1414,7 @@ get() {
         direct*)
             net=direct
             is_protocol=$net
-            json_str="override_port:$door_port,override_address:\"$door_addr\""
+            json_str="override_port:$door_port,override_address:\"$door_addr\",sniff:false"
             ;;
         socks*)
             net=socks
