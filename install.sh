@@ -1,6 +1,8 @@
 #!/bin/bash
 
 author=233boy
+# 增强版仓库地址
+is_enhanced_repo=H5Z2P5Z2P/sing-box
 # github=https://github.com/233boy/sing-box
 
 # bash fonts colors
@@ -68,7 +70,7 @@ is_conf_dir=$is_core_dir/conf
 is_log_dir=/var/log/$is_core
 is_sh_bin=/usr/local/bin/$is_core
 is_sh_dir=$is_core_dir/sh
-is_sh_repo=$author/$is_core
+is_sh_repo=$is_enhanced_repo
 is_pkg="wget tar"
 is_config_json=$is_core_dir/config.json
 tmp_var_lists=(
@@ -166,8 +168,8 @@ download() {
         is_ok=$is_core_ok
         ;;
     sh)
-        link=https://github.com/${is_sh_repo}/releases/latest/download/code.tar.gz
-        name="$is_core_name 脚本"
+        link=https://github.com/${is_enhanced_repo}/releases/latest/download/code.tar.gz
+        name="$is_core_name 增强版脚本"
         tmpfile=$tmpsh
         is_ok=$is_sh_ok
         ;;

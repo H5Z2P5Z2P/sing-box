@@ -51,14 +51,19 @@
 
 ## 快速安装（增强版）
 
-### 方法一：在线安装
+### 🔥 一键安装（推荐）
 ```bash
 bash <(wget -qO- -o- https://raw.githubusercontent.com/H5Z2P5Z2P/sing-box/main/install.sh)
 ```
 
-### 方法二：本地安装
+### 方法二：wget方式
 ```bash
-# 克隆仓库
+wget -O- https://raw.githubusercontent.com/H5Z2P5Z2P/sing-box/main/install.sh | bash
+```
+
+### 方法三：本地安装
+```bash
+# 克隆增强版仓库
 git clone https://github.com/H5Z2P5Z2P/sing-box.git
 cd sing-box
 
@@ -66,17 +71,10 @@ cd sing-box
 bash install.sh --local-install
 ```
 
-### 方法三：从当前目录安装
-如果您已经下载了脚本文件：
-```bash
-# 在 sing-box 目录中执行
-bash install.sh --local-install
-```
-
-### 一键命令（推荐）
-```bash
-wget -O- https://raw.githubusercontent.com/H5Z2P5Z2P/sing-box/main/install.sh | bash
-```
+### ✅ 增强版特性
+- **自动下载增强版**：从我们的仓库下载包含前置转发功能的版本
+- **完整功能**：包含所有 VLESS-REALITY 前置转发增强功能
+- **即装即用**：安装后自动配置前置转发
 
 ## 🔥 安装后自动配置
 
