@@ -82,6 +82,7 @@ change_list=(
     "更改 SNI (serverName)"
     "更改伪装网站"
     "更改用户名 (Username)"
+    "更改前置转发"
 )
 servername_list=(
     www.amazon.com
@@ -140,6 +141,194 @@ get_pbk() {
     is_tmp_pbk=($($is_core_bin generate reality-keypair | sed 's/.*://'))
     is_public_key=${is_tmp_pbk[1]}
     is_private_key=${is_tmp_pbk[0]}
+}
+
+# 获取可用的前置转发端口（使用随机高位端口）
+get_proxy_port() {
+    local start_port=32768
+    local end_port=65535
+    local max_attempts=100
+    local attempts=0
+    
+    while [[ $attempts -lt $max_attempts ]]; do
+        # 生成随机端口
+        local port_candidate=$(shuf -i $start_port-$end_port -n1)
+        
+        # 检查端口是否可用
+        if [[ ! $(is_test port_used $port_candidate) ]]; then
+            proxy_forward_port=$port_candidate
+            return 0
+        fi
+        
+        ((attempts++))
+    done
+    
+    err "无法找到可用的前置转发端口 (范围: $start_port-$end_port, 尝试次数: $max_attempts)"
+}
+
+# 管理前置转发配置
+manage_proxy_forward() {
+    local action=$1
+    local reality_config=$2
+    local sni=$3
+    local reality_port=$4
+    local proxy_port=$5
+    
+    case $action in
+    add)
+        # 添加前置转发配置
+        [[ ! $proxy_port ]] && get_proxy_port && proxy_port=$proxy_forward_port
+        
+        # 直接更新前置转发配置
+        update_proxy_config "$reality_port" "$proxy_port"
+        
+        msg "已为 $reality_config 创建前置转发: $proxy_port -> $reality_port (SNI: $sni)"
+        ;;
+    remove)
+        # 移除前置转发配置，通过删除Reality配置文件后重新生成
+        update_proxy_config
+        msg "已移除 $reality_config 的前置转发配置"
+        ;;
+    update)
+        # 更新前置转发配置，直接重新生成
+        update_proxy_config
+        msg "已更新 $reality_config 的前置转发配置"
+        ;;
+    esac
+}
+
+# 从Reality配置读取SNI信息
+get_reality_sni() {
+    local config_file=$1
+    local reality_port=$2
+    local config_path="$is_conf_dir/$config_file"
+    
+    if [[ -f "$config_path" ]]; then
+        jq -r '.inbounds[0].tls.server_name // empty' "$config_path" 2>/dev/null
+    fi
+}
+
+# 更新前置转发配置文件
+update_proxy_config() {
+    local proxy_config_file="$is_conf_dir/../config.json"
+    local force_reality_port="$1"
+    local force_proxy_port="$2"
+    
+    # 检查是否有Reality配置文件
+    local reality_configs=($(ls "$is_conf_dir"/VLESS-REALITY-*.json 2>/dev/null))
+    
+    if [[ ${#reality_configs[@]} -eq 0 ]]; then
+        # 如果没有Reality配置，创建空的config.json
+        jq '.' > "$proxy_config_file" <<EOF
+{
+    "log": {
+        "output": "/var/log/sing-box/access.log",
+        "level": "info",
+        "timestamp": true
+    },
+    "inbounds": [],
+    "outbounds": [
+        {
+            "tag": "direct",
+            "type": "direct"
+        },
+        {
+            "tag": "block",
+            "type": "block"
+        }
+    ],
+    "route": {
+        "rules": []
+    }
+}
+EOF
+        return
+    fi
+    
+    # 读取现有config.json中的映射关系
+    declare -A sni_groups
+    declare -A port_mapping
+    
+    # 遍历Reality配置文件，建立映射关系
+    for config_path in "${reality_configs[@]}"; do
+        local config_file=$(basename "$config_path")
+        local reality_port=$(jq -r '.inbounds[0].listen_port' "$config_path" 2>/dev/null)
+        local sni=$(jq -r '.inbounds[0].tls.server_name // empty' "$config_path" 2>/dev/null)
+        
+        [[ $reality_port && $sni ]] || continue
+        
+        # 检查是否有强制指定的端口映射
+        local proxy_port=""
+        if [[ $force_reality_port && $force_proxy_port && $reality_port == $force_reality_port ]]; then
+            proxy_port=$force_proxy_port
+        else
+            # 从现有config.json中查找对应的前置端口
+            if [[ -f "$proxy_config_file" ]]; then
+                proxy_port=$(jq -r ".inbounds[] | select(.override_port == $reality_port) | .listen_port" "$proxy_config_file" 2>/dev/null)
+            fi
+            
+            # 如果没有找到前置端口，分配新端口
+            if [[ ! $proxy_port || $proxy_port == "null" ]]; then
+                get_proxy_port
+                proxy_port=$proxy_forward_port
+                # 确保Reality端口不与前置端口冲突
+                while [[ $reality_port == $proxy_port ]]; do
+                    get_proxy_port
+                    proxy_port=$proxy_forward_port
+                done
+            fi
+        fi
+        
+        if [[ -z "${sni_groups[$sni]}" ]]; then
+            sni_groups[$sni]="dokodemo-in-$proxy_port"
+        else
+            sni_groups[$sni]="${sni_groups[$sni]},dokodemo-in-$proxy_port"
+        fi
+        port_mapping[$proxy_port]=$reality_port
+    done
+    
+    # 生成前置转发配置
+    local inbounds_json=""
+    local rules_json=""
+    
+    for proxy_port in "${!port_mapping[@]}"; do
+        reality_port=${port_mapping[$proxy_port]}
+        [[ $inbounds_json ]] && inbounds_json+=","
+        inbounds_json+="{\"tag\":\"dokodemo-in-$proxy_port\",\"type\":\"direct\",\"listen\":\"0.0.0.0\",\"listen_port\":$proxy_port,\"override_address\":\"127.0.0.1\",\"override_port\":$reality_port,\"sniff\":true}"
+    done
+    
+    for sni in "${!sni_groups[@]}"; do
+        local inbound_list="\"$(echo "${sni_groups[$sni]}" | sed 's/,/","/g')\""
+        [[ $rules_json ]] && rules_json+=","
+        rules_json+="{\"inbound\":[$inbound_list],\"domain\":[\"$sni\"],\"outbound\":\"direct\"}"
+        [[ $rules_json ]] && rules_json+=","
+        rules_json+="{\"inbound\":[$inbound_list],\"outbound\":\"block\"}"
+    done
+    
+    # 写入配置文件到config.json（使用jq格式化）
+    jq '.' > "$proxy_config_file" <<EOF
+{
+    "log": {
+        "output": "/var/log/sing-box/access.log",
+        "level": "info",
+        "timestamp": true
+    },
+    "inbounds": [$inbounds_json],
+    "outbounds": [
+        {
+            "tag": "direct",
+            "type": "direct"
+        },
+        {
+            "tag": "block",
+            "type": "block"
+        }
+    ],
+    "route": {
+        "rules": [$rules_json]
+    }
+}
+EOF
 }
 
 show_list() {
@@ -304,7 +493,12 @@ create() {
         is_tls=none
         get new
         # listen
-        is_listen='listen: "::"'
+        if [[ $net == "reality" ]]; then
+            # Reality节点只监听本地回环地址
+            is_listen='listen: "127.0.0.1"'
+        else
+            is_listen='listen: "::"'
+        fi
         # file name
         if [[ $host ]]; then
             is_config_name=$2-${host}.json
@@ -328,7 +522,22 @@ create() {
         # del old file
         [[ $is_config_file ]] && is_no_del_msg=1 && del $is_config_file
         # save json to file
-        cat <<<$is_new_json >$is_json_file
+        jq '.' <<<$is_new_json >$is_json_file
+        
+        # 为Reality协议自动创建前置转发
+        if [[ $net == "reality" && ! $is_gen ]]; then
+            # 如果是更改操作，先移除旧的前置转发配置
+            if [[ $is_change && $is_config_file ]]; then
+                manage_proxy_forward remove "$is_config_file"
+            fi
+            
+            get_proxy_port
+            manage_proxy_forward add "$is_config_name" "$is_servername" "$port" "$proxy_forward_port"
+            # 设置全局变量供info显示使用
+            is_has_proxy_forward=1
+            is_display_port=$proxy_forward_port
+        fi
+        
         if [[ $is_new_install ]]; then
             # config.json
             create config.json
@@ -600,11 +809,69 @@ change() {
         [[ ! $is_reality ]] && err "($is_config_file) 不支持更改 serverName."
         [[ $is_auto ]] && is_new_servername=$is_random_servername
         [[ ! $is_new_servername ]] && ask string is_new_servername "请输入新的 serverName:"
+        # 检查是否有前置转发，需要同步更新SNI
+        local proxy_config_file="$is_conf_dir/../config.json"
+        local old_sni=$is_servername
+        
         is_servername=$is_new_servername
         [[ $(grep -i "^233boy.com$" <<<$is_servername) ]] && {
             err "你干嘛～哎呦～"
         }
+        
+        # 如果有前置转发配置，重新生成配置
+        if [[ -f "$proxy_config_file" ]]; then
+            local has_proxy=$(jq -r ".inbounds[] | select(.override_port == $port) | .listen_port" "$proxy_config_file" 2>/dev/null)
+            if [[ $has_proxy && $has_proxy != "null" ]]; then
+                # 重新生成前置转发配置（SNI会从Reality配置文件中重新读取）
+                update_proxy_config
+                msg "已同步更新前置转发规则中的SNI: $old_sni -> $is_servername"
+            fi
+        fi
+        
         add $net
+        ;;
+    13)
+        # 更改前置转发
+        [[ ! $is_reality ]] && err "($is_config_file) 不支持更改前置转发, 仅限 REALITY 协议."
+        
+        # 检查是否已有前置转发
+        local proxy_config_file="$is_conf_dir/../config.json"
+        local current_proxy_port=""
+        if [[ -f "$proxy_config_file" ]]; then
+            current_proxy_port=$(jq -r ".inbounds[] | select(.override_port == $port) | .listen_port" "$proxy_config_file" 2>/dev/null)
+        fi
+        
+        if [[ $current_proxy_port && $current_proxy_port != "null" ]]; then
+            # 已有前置转发，询问操作
+            ask list is_proxy_action "启用前置转发 禁用前置转发 更改前置端口"
+            case $REPLY in
+            1)
+                msg "前置转发已启用"
+                ;;
+            2)
+                # 禁用前置转发
+                manage_proxy_forward remove "$is_config_file"
+                ;;
+            3)
+                # 更改前置端口
+                get_proxy_port
+                manage_proxy_forward update "$is_config_file" "$is_servername" "$port" "$proxy_forward_port"
+                ;;
+            esac
+        else
+            # 无前置转发，询问是否启用
+            ask list is_enable_proxy "启用前置转发 跳过"
+            case $REPLY in
+            1)
+                # 启用前置转发
+                get_proxy_port
+                manage_proxy_forward add "$is_config_file" "$is_servername" "$port" "$proxy_forward_port"
+                ;;
+            2)
+                msg "已跳过前置转发配置"
+                ;;
+            esac
+        fi
         ;;
     11)
         # new proxy site
@@ -1045,8 +1312,8 @@ get() {
     info)
         get file $2
         if [[ $is_config_file ]]; then
-            is_json_str=$(cat $is_conf_dir/"$is_config_file" | sed s#//.*##)
-            is_json_data=$(jq '(.inbounds[0]|.type,.listen_port,(.users[0]|.uuid,.password,.username),.method,.password,.override_port,.override_address,(.transport|.type,.path,.headers.host),(.tls|.server_name,.reality.private_key)),(.outbounds[1].tag)' <<<$is_json_str)
+            is_json_str=$(cat $is_conf_dir/"$is_config_file")
+            is_json_data=$(jq '(.inbounds[0]|.type,.listen_port,(.users[0]|.uuid,.password,.username),.method,.password,.override_port,.override_address,(.transport|.type,.path,.headers.host),(.tls|.server_name,.reality.private_key)),(first(.outbounds[] | select(.tag and (.tag | type == "string") and (.tag | startswith("public_key_"))) | .tag) // null)' <<<$is_json_str)
             [[ $? != 0 ]] && err "无法读取此文件: $is_config_file"
             is_up_var_set=(null is_protocol port uuid password username ss_method ss_password door_port door_addr net_type path host is_servername is_private_key is_public_key)
             [[ $is_debug ]] && msg "\n------------- debug: $is_config_file -------------"
@@ -1334,7 +1601,7 @@ info() {
         ;;
     reality)
         is_color=41
-        is_can_change=(0 1 5 9 10)
+        is_can_change=(0 1 5 9 10 13)
         is_info_show=(0 1 2 3 15 4 8 16 17 18)
         is_flow=xtls-rprx-vision
         is_net_type=tcp
@@ -1343,8 +1610,25 @@ info() {
             is_net_type=h2
             is_info_show=(${is_info_show[@]/15/})
         }
-        is_info_str=($is_protocol $is_addr $port $uuid $is_flow $is_net_type reality $is_servername chrome $is_public_key)
-        is_url="$is_protocol://$uuid@$is_addr:$port?encryption=none&security=reality&flow=$is_flow&type=$is_net_type&sni=$is_servername&pbk=$is_public_key&fp=chrome#233boy-$net-$is_addr"
+        
+        # 检查是否有前置转发，优先显示前置端口
+        local display_port=$port
+        if [[ $is_has_proxy_forward && $is_display_port ]]; then
+            # 新创建的配置，使用全局变量
+            display_port=$is_display_port
+        else
+            # 现有配置，从config.json中读取
+            local proxy_config_file="$is_conf_dir/../config.json"
+            if [[ -f "$proxy_config_file" ]]; then
+                local proxy_port=$(jq -r ".inbounds[] | select(.override_port == $port) | .listen_port" "$proxy_config_file" 2>/dev/null)
+                if [[ $proxy_port && $proxy_port != "null" ]]; then
+                    display_port=$proxy_port
+                fi
+            fi
+        fi
+        
+        is_info_str=($is_protocol $is_addr $display_port $uuid $is_flow $is_net_type reality $is_servername chrome $is_public_key)
+        is_url="$is_protocol://$uuid@$is_addr:$display_port?encryption=none&security=reality&flow=$is_flow&type=$is_net_type&sni=$is_servername&pbk=$is_public_key&fp=chrome#233boy-$net-$is_addr"
         ;;
     direct)
         is_can_change=(0 1 7 8)
@@ -1714,3 +1998,4 @@ main() {
         ;;
     esac
 }
+

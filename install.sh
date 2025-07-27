@@ -310,6 +310,7 @@ main() {
     clear
     echo
     echo "........... $is_core_name script by $author .........."
+    echo -e "${green}🔥 增强版本 - 支持 VLESS-REALITY 前置转发${none}"
     echo
 
     # start installing...
@@ -427,6 +428,25 @@ main() {
     load core.sh
     # create a reality config
     add reality
+    
+    # 显示增强版本特性说明
+    echo
+    msg ok "安装完成!"
+    echo -e "${green}🆕 增强版本新功能:${none}"
+    echo -e "  ✅ 自动为 VLESS-REALITY 创建前置转发"
+    echo -e "  ✅ SNI 嗅探保护和端口隐藏" 
+    echo -e "  ✅ 端口和 SNI 修改时自动同步"
+    echo -e "  ✅ 前置转发管理选项"
+    echo
+    echo -e "${yellow}使用方法:${none}"
+    echo -e "  🔧 管理前置转发: ${green}$is_core change [配置名]${none} 选择'更改前置转发'"
+    echo -e "  📊 查看配置信息: ${green}$is_core info${none} (显示前置转发端口)"
+    echo -e "  🔄 更改端口: ${green}$is_core port [配置名] [端口]${none} (自动同步)"
+    echo -e "  🌐 更改SNI: ${green}$is_core sni [配置名] [域名]${none} (自动同步)"
+    echo
+    echo -e "${cyan}客户端连接使用前置转发端口，不是 Reality 节点端口${none}"
+    echo
+    
     # remove tmp dir and exit.
     exit_and_del_tmpdir ok
 }
