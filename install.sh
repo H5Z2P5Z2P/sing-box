@@ -429,6 +429,16 @@ main() {
     # create a reality config
     add reality
     
+    # 验证前置转发配置是否正确创建
+    if [[ -f $is_config_json ]]; then
+        local proxy_check=$(jq -r '.inbounds[]? | select(.tag and (.tag | startswith("dokodemo-in"))) | .tag' $is_config_json 2>/dev/null)
+        if [[ $proxy_check ]]; then
+            msg ok "前置转发配置创建成功"
+        else
+            msg warn "前置转发配置未找到，可能需要手动配置"
+        fi
+    fi
+    
     # 显示增强版本特性说明
     echo
     msg ok "安装完成!"

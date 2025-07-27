@@ -570,6 +570,16 @@ create() {
         manage restart caddy &
         ;;
     config.json)
+        # 检查是否已存在前置转发配置，如果存在则不覆盖
+        if [[ -f $is_config_json ]]; then
+            # 检查是否包含前置转发配置（包含dokodemo-in标签）
+            local has_proxy_forward=$(jq -r '.inbounds[]? | select(.tag and (.tag | startswith("dokodemo-in"))) | .tag' $is_config_json 2>/dev/null)
+            if [[ $has_proxy_forward ]]; then
+                # 已有前置转发配置，不覆盖
+                return
+            fi
+        fi
+        
         is_log='log:{output:"/var/log/'$is_core'/access.log",level:"info","timestamp":true}'
         is_dns='dns:{}'
         is_ntp='ntp:{"enabled":true,"server":"time.apple.com"},'
